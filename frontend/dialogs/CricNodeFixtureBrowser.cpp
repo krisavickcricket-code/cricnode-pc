@@ -1,6 +1,7 @@
 #include "CricNodeFixtureBrowser.hpp"
 
 #include <QDate>
+#include <QDesktopServices>
 #include <QHeaderView>
 #include <QMessageBox>
 #include <QRegularExpression>
@@ -10,7 +11,7 @@
 CricNodeFixtureBrowser::CricNodeFixtureBrowser(QWidget *parent) : QDialog(parent)
 {
 	setWindowTitle("Browse Fixtures");
-	setMinimumSize(700, 500);
+	setMinimumSize(750, 550);
 
 	auto *layout = new QVBoxLayout(this);
 
@@ -48,10 +49,70 @@ CricNodeFixtureBrowser::CricNodeFixtureBrowser(QWidget *parent) : QDialog(parent
 	tokenLabel->hide();
 	tokenInput->hide();
 
-	/* Fetch button */
+	/* Date filter row */
+	auto *dateRow = new QHBoxLayout();
+	dateFilterCheck = new QCheckBox("Filter by date:");
+	dateFilter = new QDateEdit(QDate::currentDate());
+	dateFilter->setCalendarPopup(true);
+	dateFilter->setDisplayFormat("MMM d, yyyy");
+	dateFilter->setEnabled(false);
+	connect(dateFilterCheck, &QCheckBox::toggled, this, [this](bool checked) {
+		dateFilter->setEnabled(checked);
+		/* Re-filter if we already have results */
+		if (!allFixtures.empty()) {
+			fixtures.clear();
+			if (checked) {
+				QDate d = dateFilter->date();
+				for (auto &f : allFixtures) {
+					/* Simple date string match */
+					QString dateStr = QString::fromStdString(f.date).toLower();
+					QString monthName = d.toString("MMM").toLower();
+					bool dayMatch = dateStr.contains(QString::number(d.day()));
+					bool monthMatch = dateStr.contains(monthName);
+					bool yearMatch = dateStr.contains(QString::number(d.year()));
+					if (dayMatch && monthMatch && yearMatch)
+						fixtures.push_back(f);
+				}
+			} else {
+				fixtures = allFixtures;
+			}
+			PopulateTable();
+		}
+	});
+	connect(dateFilter, &QDateEdit::dateChanged, this, [this](const QDate &d) {
+		if (dateFilterCheck->isChecked() && !allFixtures.empty()) {
+			fixtures.clear();
+			for (auto &f : allFixtures) {
+				QString dateStr = QString::fromStdString(f.date).toLower();
+				QString monthName = d.toString("MMM").toLower();
+				bool dayMatch = dateStr.contains(QString::number(d.day()));
+				bool monthMatch = dateStr.contains(monthName);
+				bool yearMatch = dateStr.contains(QString::number(d.year()));
+				if (dayMatch && monthMatch && yearMatch)
+					fixtures.push_back(f);
+			}
+			PopulateTable();
+		}
+	});
+	dateRow->addWidget(dateFilterCheck);
+	dateRow->addWidget(dateFilter);
+	dateRow->addStretch();
+	layout->addLayout(dateRow);
+
+	/* Buttons row: Fetch + Browse on Web */
+	auto *fetchRow = new QHBoxLayout();
 	fetchButton = new QPushButton("Fetch Fixtures");
 	connect(fetchButton, &QPushButton::clicked, this, &CricNodeFixtureBrowser::OnFetchClicked);
-	layout->addWidget(fetchButton);
+	fetchRow->addWidget(fetchButton);
+
+	browseWebButton = new QPushButton("Open in Browser");
+	browseWebButton->setToolTip("Open the fixtures page in your web browser to find match IDs");
+	connect(browseWebButton, &QPushButton::clicked, this, &CricNodeFixtureBrowser::OnBrowseWebClicked);
+	fetchRow->addWidget(browseWebButton);
+	browseWebButton->hide();
+
+	fetchRow->addStretch();
+	layout->addLayout(fetchRow);
 
 	/* Progress */
 	progressBar = new QProgressBar();
@@ -60,6 +121,7 @@ CricNodeFixtureBrowser::CricNodeFixtureBrowser(QWidget *parent) : QDialog(parent
 
 	/* Status */
 	statusLabel = new QLabel("");
+	statusLabel->setWordWrap(true);
 	layout->addWidget(statusLabel);
 
 	/* Fixture table */
@@ -102,11 +164,14 @@ void CricNodeFixtureBrowser::OnProviderChanged(int index)
 	QString provider = providerCombo->itemData(index).toString();
 	currentProvider = provider.toStdString();
 
+	browseWebButton->hide();
+
 	if (provider == "cricclubs") {
 		idLabel->setText("Club ID:");
-		idInput->setPlaceholderText("e.g. 123");
+		idInput->setPlaceholderText("e.g. 423");
 		tokenLabel->hide();
 		tokenInput->hide();
+		browseWebButton->show();
 	} else if (provider == "dcl") {
 		idLabel->setText("(No ID needed)");
 		idInput->setPlaceholderText("Leave empty — fetches all DCL matches");
@@ -131,6 +196,7 @@ void CricNodeFixtureBrowser::OnProviderChanged(int index)
 
 void CricNodeFixtureBrowser::OnFetchClicked()
 {
+	allFixtures.clear();
 	fixtures.clear();
 	fixtureTable->setRowCount(0);
 	selectButton->setEnabled(false);
@@ -144,6 +210,27 @@ void CricNodeFixtureBrowser::OnFetchClicked()
 	} else if (currentProvider == "cricclubs") {
 		FetchCricClubsFixtures();
 	}
+}
+
+void CricNodeFixtureBrowser::OnBrowseWebClicked()
+{
+	QString clubId = idInput->text().trimmed();
+	if (clubId.isEmpty()) {
+		QMessageBox::warning(this, "Missing Info", "Please enter a Club ID first.");
+		return;
+	}
+
+	int year = QDate::currentDate().year();
+	QString url;
+
+	if (currentProvider == "cricclubs") {
+		url = QString("https://cricclubs.com/club/fixtures.do?clubId=%1&league=All&year=%2&allseries=true")
+			      .arg(clubId)
+			      .arg(year);
+	}
+
+	if (!url.isEmpty())
+		QDesktopServices::openUrl(QUrl(url));
 }
 
 void CricNodeFixtureBrowser::FetchDclFixtures()
@@ -237,7 +324,10 @@ void CricNodeFixtureBrowser::FetchCricClubsFixtures()
 
 	QNetworkRequest request(url);
 	request.setRawHeader("User-Agent",
-			     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+			     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+			     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+	request.setRawHeader("Accept", "text/html,application/xhtml+xml");
+	request.setRawHeader("Accept-Language", "en-US,en;q=0.9");
 	request.setTransferTimeout(30000);
 	networkManager->get(request);
 }
@@ -281,16 +371,20 @@ void CricNodeFixtureBrowser::OnNetworkReply(QNetworkReply *reply)
 					  .arg(dclTotalPages));
 			progressBar->setVisible(true);
 		} else {
+			allFixtures = fixtures;
 			PopulateTable();
 		}
 	} else if (requestUrl.host().contains("play-cricket")) {
 		ParsePlayCricketResponse(data);
+		allFixtures = fixtures;
 		PopulateTable();
 	} else if (requestUrl.host().contains("playhq")) {
 		ParsePlayHQResponse(data);
+		allFixtures = fixtures;
 		PopulateTable();
 	} else if (requestUrl.host().contains("cricclubs")) {
 		ParseCricClubsResponse(data);
+		allFixtures = fixtures;
 		PopulateTable();
 	}
 }
@@ -418,79 +512,69 @@ void CricNodeFixtureBrowser::ParsePlayHQResponse(const QByteArray &data)
 void CricNodeFixtureBrowser::ParseCricClubsResponse(const QByteArray &data)
 {
 	/*
-	 * HTML scraping replicating CricClubsParser.kt from the Android app.
-	 * Parses div.schedule-all blocks from the CricClubs fixtures page.
+	 * Port of CricClubsParser.fixturesExtractionJs from the Android app.
+	 * Parses div.schedule-all blocks from the CricClubs fixtures page HTML.
 	 *
-	 * Each block contains:
-	 *   .sch-time → h2 (day number), h5[0] (month+year), h5[1] (time)
-	 *   .schedule-text h3 a[href*="viewTeam"] → team names
-	 *   a[href*="viewScorecard"] → scorecard link with matchId
-	 *   a[href*="viewGround"] → venue name
-	 *   [id^="deleteRow"] → fixtureId fallback
+	 * Note: CricClubs may block automated requests (403). If scraping fails,
+	 * the user can click "Open in Browser" to view fixtures manually.
 	 */
 	QString html = QString::fromUtf8(data);
 
-	/* Split on div.schedule-all blocks */
-	QRegularExpression blockRe(
-		R"(<div[^>]*class\s*=\s*"[^"]*schedule-all[^"]*"[^>]*>(.*?)</div>\s*</div>\s*</div>)",
-		QRegularExpression::DotMatchesEverythingOption);
+	/* Check if we got blocked */
+	if (html.contains("403") || html.contains("Access Denied") || html.length() < 500) {
+		SetStatus("CricClubs blocked the automated request.\n"
+			  "Click \"Open in Browser\" to view fixtures on the website,\n"
+			  "then enter the Match ID manually using \"Cancel\" → manual entry.");
+		return;
+	}
 
-	/* More robust: split on schedule-all divs by finding start markers */
-	QStringList blocks;
-	int searchFrom = 0;
-	QString marker = "schedule-all";
-	while (true) {
-		int pos = html.indexOf(marker, searchFrom);
-		if (pos < 0)
-			break;
-		/* Find the enclosing div start */
-		int divStart = html.lastIndexOf("<div", pos);
-		if (divStart < 0) {
-			searchFrom = pos + marker.length();
-			continue;
-		}
-		/* Find the next schedule-all or end of content */
-		int nextPos = html.indexOf(marker, pos + marker.length());
-		int blockEnd = (nextPos > 0) ? html.lastIndexOf("<div", nextPos)
-					     : html.length();
-		if (blockEnd <= divStart)
-			blockEnd = html.length();
+	/* Find each schedule-all block start position */
+	QRegularExpression schedStart("schedule-all",
+				      QRegularExpression::CaseInsensitiveOption);
 
-		blocks.append(html.mid(divStart, blockEnd - divStart));
-		searchFrom = (nextPos > 0) ? nextPos : html.length();
+	QList<int> blockStarts;
+	auto it = schedStart.globalMatch(html);
+	while (it.hasNext()) {
+		auto m = it.next();
+		blockStarts.append(m.capturedStart());
+	}
+
+	if (blockStarts.isEmpty()) {
+		SetStatus("No fixtures found on the CricClubs page.\n"
+			  "Click \"Open in Browser\" to view fixtures manually.");
+		return;
 	}
 
 	/* Helper regexes */
-	QRegularExpression teamRe(
-		R"(viewTeam[^"]*"[^>]*>([^<]+)<)",
-		QRegularExpression::CaseInsensitiveOption);
-	QRegularExpression scorecardRe(
-		R"(viewScorecard[^"]*matchId=(\d+)[^"]*clubId=(\d+))",
-		QRegularExpression::CaseInsensitiveOption);
-	QRegularExpression matchIdRe(
-		R"(matchId=(\d+))",
-		QRegularExpression::CaseInsensitiveOption);
-	QRegularExpression venueRe(
-		R"(viewGround[^"]*"[^>]*>([^<]+)<)",
-		QRegularExpression::CaseInsensitiveOption);
-	QRegularExpression deleteRowRe(
-		R"(deleteRow(\d+))",
-		QRegularExpression::CaseInsensitiveOption);
-	QRegularExpression fixtureIdRe(
-		R"(fixtureId=(\d+))",
-		QRegularExpression::CaseInsensitiveOption);
-	/* Date from sch-time: <h2>day</h2> and <h5>MonthYear</h5> <h5>time</h5> */
-	QRegularExpression dayRe(R"(<h2[^>]*>\s*(\d+)\s*</h2>)",
-				 QRegularExpression::CaseInsensitiveOption);
-	QRegularExpression h5Re(R"(<h5[^>]*>([^<]+)</h5>)",
+	QRegularExpression teamRe("viewTeam[^\"]*\"[^>]*>([^<]+)<",
+				  QRegularExpression::CaseInsensitiveOption);
+	QRegularExpression venueRe("viewGround[^\"]*\"[^>]*>([^<]+)<",
+				   QRegularExpression::CaseInsensitiveOption);
+	QRegularExpression scorecardRe("viewScorecard[^\"]*matchId=(\\d+)",
+				       QRegularExpression::CaseInsensitiveOption);
+	QRegularExpression matchIdRe("matchId=(\\d+)",
+				     QRegularExpression::CaseInsensitiveOption);
+	QRegularExpression clubIdRe("clubId=(\\d+)",
+				    QRegularExpression::CaseInsensitiveOption);
+	QRegularExpression deleteRowRe("deleteRow(\\d+)",
+				       QRegularExpression::CaseInsensitiveOption);
+	QRegularExpression fixtureIdRe("fixtureId=(\\d+)",
+				       QRegularExpression::CaseInsensitiveOption);
+	QRegularExpression h2Re("<h2[^>]*>(\\d+)</h2>",
+				QRegularExpression::CaseInsensitiveOption);
+	QRegularExpression h5Re("<h5[^>]*>([^<]+)</h5>",
 				QRegularExpression::CaseInsensitiveOption);
 
-	for (const QString &block : blocks) {
+	for (int i = 0; i < blockStarts.size(); i++) {
+		int start = blockStarts[i];
+		int end = (i + 1 < blockStarts.size()) ? blockStarts[i + 1] : html.size();
+		QString block = html.mid(start, end - start);
+
 		CricNodeFixture f;
 		f.provider = "cricclubs";
 		f.clubId = cricClubsClubId;
 
-		/* Extract teams */
+		/* Teams */
 		auto teamIt = teamRe.globalMatch(block);
 		if (teamIt.hasNext())
 			f.team1 = teamIt.next().captured(1).trimmed().toStdString();
@@ -498,20 +582,38 @@ void CricNodeFixtureBrowser::ParseCricClubsResponse(const QByteArray &data)
 			f.team2 = teamIt.next().captured(1).trimmed().toStdString();
 
 		if (f.team1.empty() && f.team2.empty())
-			continue; /* Skip blocks without team info */
+			continue;
 
-		/* Extract matchId from scorecard link */
+		/* Date: h2 = day number, h5[0] = "Mon Year", h5[1] = time */
+		auto h2Match = h2Re.match(block);
+		QList<QString> h5Values;
+		auto h5It = h5Re.globalMatch(block);
+		while (h5It.hasNext())
+			h5Values.append(h5It.next().captured(1).trimmed());
+
+		QString monthYear = h5Values.size() > 0 ? h5Values[0] : "";
+		QString timeStr = h5Values.size() > 1 ? h5Values[1] : "";
+		QString dayStr = h2Match.hasMatch() ? h2Match.captured(1) : "";
+		f.date = (monthYear + " " + dayStr).trimmed().toStdString();
+		f.time = timeStr.toStdString();
+
+		/* Venue */
+		auto venueMatch = venueRe.match(block);
+		if (venueMatch.hasMatch())
+			f.venue = venueMatch.captured(1).trimmed().toStdString();
+
+		/* Scorecard link → match is scored */
 		auto scMatch = scorecardRe.match(block);
+		f.hasScorecard = scMatch.hasMatch();
+
+		/* Match ID from scorecard, matchId link, deleteRow, or fixtureId */
 		if (scMatch.hasMatch()) {
 			f.matchId = scMatch.captured(1).toStdString();
-			f.hasScorecard = true;
 		} else {
-			/* Try any matchId link */
 			auto midMatch = matchIdRe.match(block);
 			if (midMatch.hasMatch())
 				f.matchId = midMatch.captured(1).toStdString();
 		}
-		/* Fallback: deleteRow ID or fixtureId */
 		if (f.matchId.empty()) {
 			auto drMatch = deleteRowRe.match(block);
 			if (drMatch.hasMatch())
@@ -523,32 +625,16 @@ void CricNodeFixtureBrowser::ParseCricClubsResponse(const QByteArray &data)
 				f.matchId = fiMatch.captured(1).toStdString();
 		}
 
-		/* Extract venue */
-		auto venueMatch = venueRe.match(block);
-		if (venueMatch.hasMatch())
-			f.venue = venueMatch.captured(1).trimmed().toStdString();
+		/* Club ID override */
+		auto cidMatch = clubIdRe.match(block);
+		if (cidMatch.hasMatch())
+			f.clubId = cidMatch.captured(1).toStdString();
 
-		/* Extract date and time from sch-time section */
-		auto dayMatch = dayRe.match(block);
-		QList<QString> h5Values;
-		auto h5It = h5Re.globalMatch(block);
-		while (h5It.hasNext())
-			h5Values.append(h5It.next().captured(1).trimmed());
-
-		QString monthYear = h5Values.size() > 0 ? h5Values[0] : "";
-		QString timeStr = h5Values.size() > 1 ? h5Values[1] : "";
-		QString dayStr = dayMatch.hasMatch() ? dayMatch.captured(1) : "";
-
-		f.date = (monthYear + " " + dayStr).trimmed().toStdString();
-		f.time = timeStr.toStdString();
-
-		/* Determine status */
+		/* Status */
+		QString blockLower = block.toLower();
 		if (f.hasScorecard) {
-			QString blockLower = block.toLower();
-			if (blockLower.contains("won by") ||
-			    blockLower.contains("tied") ||
-			    blockLower.contains("draw") ||
-			    blockLower.contains("no result")) {
+			if (blockLower.contains("won by") || blockLower.contains("tied") ||
+			    blockLower.contains("draw") || blockLower.contains("no result")) {
 				f.status = "COMPLETED";
 			} else {
 				f.status = "LIVE";
@@ -557,12 +643,13 @@ void CricNodeFixtureBrowser::ParseCricClubsResponse(const QByteArray &data)
 			f.status = "SCHEDULED";
 		}
 
-		fixtures.push_back(f);
+		if (!f.matchId.empty())
+			fixtures.push_back(f);
 	}
 
-	if (fixtures.empty() && !html.contains("schedule-all")) {
-		SetStatus("No fixtures found. The Club ID may be incorrect, "
-			  "or CricClubs may have blocked the request.");
+	if (fixtures.empty()) {
+		SetStatus("Could not parse fixtures from CricClubs.\n"
+			  "Click \"Open in Browser\" to find match IDs manually.");
 	}
 }
 

@@ -9,6 +9,8 @@
 #include <QTableWidget>
 #include <QLabel>
 #include <QProgressBar>
+#include <QDateEdit>
+#include <QCheckBox>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QJsonDocument>
@@ -48,6 +50,7 @@ private slots:
 	void OnFetchClicked();
 	void OnSelectClicked();
 	void OnNetworkReply(QNetworkReply *reply);
+	void OnBrowseWebClicked();
 
 private:
 	void FetchDclFixtures();
@@ -71,6 +74,9 @@ private:
 	QLineEdit *tokenInput;
 	QLabel *tokenLabel;
 	QPushButton *fetchButton;
+	QPushButton *browseWebButton;
+	QDateEdit *dateFilter;
+	QCheckBox *dateFilterCheck;
 	QTableWidget *fixtureTable;
 	QPushButton *selectButton;
 	QPushButton *cancelButton;
@@ -78,7 +84,8 @@ private:
 	QProgressBar *progressBar;
 
 	QNetworkAccessManager *networkManager;
-	std::vector<CricNodeFixture> fixtures;
+	std::vector<CricNodeFixture> allFixtures; /* unfiltered */
+	std::vector<CricNodeFixture> fixtures;    /* filtered for display */
 	CricNodeFixture selectedFixture;
 	std::string currentProvider;
 	int dclPagesLoaded = 0;
