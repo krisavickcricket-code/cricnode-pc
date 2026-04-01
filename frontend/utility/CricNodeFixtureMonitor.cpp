@@ -132,7 +132,8 @@ void CricNodeFixtureMonitor::PollCricClubs(MonitoredFixture &fixture)
 			      .arg(QString::fromStdString(fixture.matchId),
 			           QString::fromStdString(fixture.clubId));
 
-	QNetworkRequest request(QUrl(url));
+	QUrl reqUrl(url);
+	QNetworkRequest request(reqUrl);
 	request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
 	request.setTransferTimeout(15000);
 	request.setAttribute(QNetworkRequest::User,

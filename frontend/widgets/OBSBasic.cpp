@@ -19,6 +19,7 @@
 
 #include "OBSBasic.hpp"
 #include "CricNodeOverlayManager.hpp"
+#include <utility/CricNodeMetadata.hpp>
 #include "ui-config.h"
 
 #include "ColorSelect.hpp"

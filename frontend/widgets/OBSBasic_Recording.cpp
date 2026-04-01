@@ -238,7 +238,7 @@ void OBSBasic::RecordingStop(int code, QString last_error)
 				    cricnodeEventCollector->scorecardProvider != "none") {
 					CricNodeMetadata metadata;
 					metadata.appVersionCode = 1;
-					metadata.appVersionName = OBS_VERSION;
+					metadata.appVersionName = obs_get_version_string();
 					metadata.recordingStartUtc = cricnodeRecordingStartMs;
 					metadata.scorecardProvider =
 						cricnodeEventCollector->scorecardProvider;

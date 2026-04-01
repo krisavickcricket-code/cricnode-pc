@@ -543,17 +543,8 @@ void CricNodeOverlayManager::RemoveSourceForOverlay(const std::string &overlayId
 std::string CricNodeOverlayManager::GetScorecardUrl(const CricNodeOverlay &overlay)
 {
 	/* Build file:// URL pointing to bundled scorecard HTML */
-	char *dataPath = obs_module_file("cricnode/scorecards");
-	std::string basePath;
-
-	if (dataPath) {
-		basePath = dataPath;
-		bfree(dataPath);
-	} else {
-		/* Fallback: use the frontend data directory */
-		QString appDir = QCoreApplication::applicationDirPath();
-		basePath = (appDir + "/data/obs-studio/cricnode/scorecards").toStdString();
-	}
+	QString appDir = QCoreApplication::applicationDirPath();
+	std::string basePath = (appDir + "/data/obs-studio/cricnode/scorecards").toStdString();
 
 	std::string htmlFile;
 	std::string params;
