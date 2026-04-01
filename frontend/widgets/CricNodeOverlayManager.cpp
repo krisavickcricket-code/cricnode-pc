@@ -1,6 +1,9 @@
 #include "CricNodeOverlayManager.hpp"
 #include "OBSBasic.hpp"
 
+#include <dialogs/CricNodeFixtureBrowser.hpp>
+#include <utility/CricNodeFixtureMonitor.hpp>
+
 #include <qt-wrappers.hpp>
 
 #include <QFileDialog>
@@ -122,11 +125,17 @@ CricNodeOverlayManager::CricNodeOverlayManager(QWidget *parent)
 	connect(rotationTimer, &QTimer::timeout, this, &CricNodeOverlayManager::UpdateRotatingImages);
 	rotationTimer->start();
 
+	/* Connect fixture monitor for auto-switch to live */
+	connect(CricNodeFixtureMonitor::Instance(),
+		&CricNodeFixtureMonitor::FixtureWentLive, this,
+		&CricNodeOverlayManager::OnFixtureWentLive);
+
 	LoadConfig();
 }
 
 CricNodeOverlayManager::~CricNodeOverlayManager()
 {
+	CricNodeFixtureMonitor::Instance()->StopAll();
 	SaveConfig();
 }
 
@@ -239,40 +248,101 @@ void CricNodeOverlayManager::AddUrlOverlay()
 
 void CricNodeOverlayManager::AddScorecardOverlay()
 {
-	QStringList providers;
-	providers << "CricClubs" << "Play-Cricket" << "PlayHQ" << "DCL";
+	/* Ask user: browse fixtures or enter manually? */
+	QStringList options;
+	options << "Browse Fixtures (recommended)" << "Enter Match ID Manually";
 
 	bool ok;
-	QString provider =
-		QInputDialog::getItem(this, "Scorecard Provider", "Select league provider:", providers, 0, false, &ok);
+	QString choice = QInputDialog::getItem(this, "Add Scorecard",
+					       "How would you like to add a scorecard?",
+					       options, 0, false, &ok);
 	if (!ok)
-		return;
-
-	QString matchId = QInputDialog::getText(this, "Match ID", "Enter Match ID:", QLineEdit::Normal, "", &ok);
-	if (!ok || matchId.isEmpty())
 		return;
 
 	CricNodeOverlay overlay;
 	overlay.id = GenerateId();
 	overlay.type = "scorecard";
 
-	if (provider == "CricClubs") {
-		overlay.scorecardProvider = "cricclubs";
-		QString clubId =
-			QInputDialog::getText(this, "Club ID", "Enter Club ID:", QLineEdit::Normal, "", &ok);
+	if (choice == options[0]) {
+		/* Launch fixture browser dialog */
+		CricNodeFixtureBrowser browser(this);
+		if (browser.exec() != QDialog::Accepted)
+			return;
+
+		CricNodeFixture fixture = browser.GetSelectedFixture();
+		if (fixture.matchId.empty())
+			return;
+
+		overlay.scorecardProvider = fixture.provider;
+		overlay.matchId = fixture.matchId;
+		overlay.clubId = fixture.clubId;
+		overlay.team1 = fixture.team1;
+		overlay.team2 = fixture.team2;
+		overlay.matchDate = fixture.date;
+
+		QString providerName;
+		if (fixture.provider == "cricclubs")
+			providerName = "CricClubs";
+		else if (fixture.provider == "dcl")
+			providerName = "DCL";
+		else if (fixture.provider == "playcricket")
+			providerName = "Play-Cricket";
+		else if (fixture.provider == "playhq")
+			providerName = "PlayHQ";
+
+		overlay.name = providerName.toStdString() + " - " +
+			       fixture.team1 + " vs " + fixture.team2;
+
+		/* If the fixture is scheduled (not live), start monitoring */
+		if (fixture.status == "SCHEDULED" &&
+		    (fixture.provider == "dcl" || fixture.provider == "cricclubs")) {
+			MonitoredFixture mf;
+			mf.overlayId = overlay.id;
+			mf.provider = fixture.provider;
+			mf.matchId = fixture.matchId;
+			mf.clubId = fixture.clubId;
+			mf.team1 = fixture.team1;
+			mf.team2 = fixture.team2;
+			mf.matchDate = fixture.date;
+			CricNodeFixtureMonitor::Instance()->StartMonitoring(mf);
+		}
+	} else {
+		/* Manual entry fallback */
+		QStringList providers;
+		providers << "CricClubs" << "Play-Cricket" << "PlayHQ" << "DCL";
+
+		QString provider = QInputDialog::getItem(
+			this, "Scorecard Provider",
+			"Select league provider:", providers, 0, false, &ok);
 		if (!ok)
 			return;
-		overlay.clubId = clubId.toStdString();
-	} else if (provider == "Play-Cricket") {
-		overlay.scorecardProvider = "playcricket";
-	} else if (provider == "PlayHQ") {
-		overlay.scorecardProvider = "playhq";
-	} else if (provider == "DCL") {
-		overlay.scorecardProvider = "dcl";
-	}
 
-	overlay.matchId = matchId.toStdString();
-	overlay.name = provider.toStdString() + " - Match " + matchId.toStdString();
+		QString matchId = QInputDialog::getText(
+			this, "Match ID", "Enter Match ID:",
+			QLineEdit::Normal, "", &ok);
+		if (!ok || matchId.isEmpty())
+			return;
+
+		if (provider == "CricClubs") {
+			overlay.scorecardProvider = "cricclubs";
+			QString clubId = QInputDialog::getText(
+				this, "Club ID", "Enter Club ID:",
+				QLineEdit::Normal, "", &ok);
+			if (!ok)
+				return;
+			overlay.clubId = clubId.toStdString();
+		} else if (provider == "Play-Cricket") {
+			overlay.scorecardProvider = "playcricket";
+		} else if (provider == "PlayHQ") {
+			overlay.scorecardProvider = "playhq";
+		} else if (provider == "DCL") {
+			overlay.scorecardProvider = "dcl";
+		}
+
+		overlay.matchId = matchId.toStdString();
+		overlay.name = provider.toStdString() + " - Match " +
+			       matchId.toStdString();
+	}
 
 	overlays.push_back(overlay);
 	CreateOrUpdateSource(overlay);
@@ -306,6 +376,9 @@ void CricNodeOverlayManager::RemoveOverlay()
 	int row = overlayList->currentRow();
 	if (row < 0 || row >= (int)overlays.size())
 		return;
+
+	/* Stop fixture monitoring if active for this overlay */
+	CricNodeFixtureMonitor::Instance()->StopMonitoring(overlays[row].id);
 
 	RemoveSourceForOverlay(overlays[row].id);
 	overlays.erase(overlays.begin() + row);
@@ -550,6 +623,31 @@ void CricNodeOverlayManager::LoadConfig()
 		overlays.push_back(CricNodeOverlay::fromJson(v.toObject()));
 
 	RefreshList();
+}
+
+void CricNodeOverlayManager::OnFixtureWentLive(QString overlayId,
+						QString newMatchId,
+						QString provider)
+{
+	/* Find the overlay and update its match ID + browser source URL */
+	for (auto &o : overlays) {
+		if (o.id == overlayId.toStdString() && o.type == "scorecard") {
+			o.matchId = newMatchId.toStdString();
+
+			/* Rebuild the browser source with the new URL */
+			CreateOrUpdateSource(o);
+			SaveConfig();
+
+			blog(LOG_INFO,
+			     "[CricNode] Overlay %s updated to live match %s (%s)",
+			     o.name.c_str(), newMatchId.toUtf8().constData(),
+			     provider.toUtf8().constData());
+
+			RefreshList();
+			emit OverlaysChanged();
+			break;
+		}
+	}
 }
 
 void CricNodeOverlayManager::ApplyOverlaysToScene()

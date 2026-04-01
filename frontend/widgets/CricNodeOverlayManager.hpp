@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+class CricNodeFixtureMonitor;
+
 struct CricNodeOverlay {
 	std::string id;
 	std::string name;
@@ -74,6 +76,7 @@ private slots:
 	void RemoveOverlay();
 	void ToggleOverlay(int row);
 	void UpdateRotatingImages();
+	void OnFixtureWentLive(QString overlayId, QString newMatchId, QString provider);
 
 private:
 	void RefreshList();
