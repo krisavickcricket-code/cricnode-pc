@@ -58,6 +58,9 @@ private:
 	void ParseDclResponse(const QByteArray &data);
 	void ParsePlayCricketResponse(const QByteArray &data);
 	void ParsePlayHQResponse(const QByteArray &data);
+	void ParseCricClubsResponse(const QByteArray &data);
+
+	std::string cricClubsClubId;
 
 	void PopulateTable();
 	void SetStatus(const QString &text);
